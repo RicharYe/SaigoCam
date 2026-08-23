@@ -1,0 +1,6 @@
+{
+  "name": "SaigoCam",
+  "description": "A minimal, production-ready Android application that works as a simple DroidCam-style camera source for OBS over Wi-Fi and USB.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
