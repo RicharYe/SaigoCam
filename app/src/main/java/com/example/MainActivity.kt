@@ -66,8 +66,7 @@ class MainActivity : ComponentActivity() {
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         
         val requiredPermissions = mutableListOf(
-            Manifest.permission.CAMERA,
-            Manifest.permission.RECORD_AUDIO
+            Manifest.permission.CAMERA
         )
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             requiredPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
@@ -108,7 +107,7 @@ class MainActivity : ComponentActivity() {
                         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 if (!hasPermissions) {
-                                    Text("Camera and Audio permissions are required to stream.", modifier = Modifier.padding(16.dp))
+                                    Text("Camera permission is required to stream.", modifier = Modifier.padding(16.dp))
                                     Spacer(modifier = Modifier.height(16.dp))
                                     Button(onClick = { launcher.launch(requiredPermissions.toTypedArray()) }) {
                                         Text("Grant Permissions")
@@ -402,15 +401,12 @@ fun SetupGuideContent(service: StreamingService) {
                 
                 Text(
                     text = "Video: OBS Virtual Camera\n" +
-                           "• In OBS, with your SaigoCam feed already showing as a source:\n" +
+                           "• In OBS, with your SaigoCam video feed already showing as a source:\n" +
                            "• Click 'Start Virtual Camera' (bottom-right of OBS, or Tools → Start Virtual Camera).\n" +
                            "• In Google Meet, click Settings (⚙️) → Video → select 'OBS Virtual Camera' as your camera.\n\n" +
-                           "Audio: Virtual Microphone (needs VB-Cable)\n" +
-                           "OBS Virtual Camera only sends video. To send phone microphone audio:\n" +
-                           "• Download & install VB-Cable (https://vb-audio.com/Cable/) on your PC.\n" +
-                           "• In OBS: Settings → Audio → Monitoring Device → set to 'CABLE Input (VB-Audio)'.\n" +
-                           "• In OBS Audio Mixer: Click the ⋮ (three dots) next to SaigoCam audio source → Advanced Audio Properties → set Monitor to 'Monitor and Output'.\n" +
-                           "• In Google Meet: Settings → Audio → Microphone → select 'CABLE Output (VB-Audio)'.",
+                           "Audio Setup\n" +
+                           "• This app streams video only for absolute minimum latency.\n" +
+                           "• You can add and use any audio source (such as your PC microphone, USB headset, or external microphone) directly in OBS or Google Meet.",
                     style = MaterialTheme.typography.bodyMedium
                 )
             }

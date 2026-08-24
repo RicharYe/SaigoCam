@@ -111,10 +111,34 @@ class StreamingService : Service(), ConnectChecker {
             // Auto-detect camera sensor orientation for correct preview/stream rotation
             val rotation = com.pedro.encoder.input.video.CameraHelper.getCameraOrientation(this)
 
-            if (rtspServerCamera2?.prepareAudio() == true &&
-                rtspServerCamera2?.prepareVideo(
+            // Set AVC/H.264 profile to Constrained Baseline (no B-frames) for zero-latency decoding
+            val profile = android.media.MediaCodecInfo.CodecProfileLevel.AVCProfileConstrainedBaseline
+            val level = -1 // Let the encoder choose the appropriate level
+
+            var prepared = false
+            try {
+                prepared = rtspServerCamera2?.prepareVideo(
+                    res.width, res.height, fps, bitrate, iFrameInterval, rotation, profile, level
+                ) == true
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            // Fallback to default profile if constrained baseline is not supported by the hardware encoder
+            if (!prepared) {
+                prepared = rtspServerCamera2?.prepareVideo(
                     res.width, res.height, fps, bitrate, iFrameInterval, rotation
-                ) == true) {
+                ) == true
+            }
+
+            if (prepared) {
+
+                // Disable audio track completely so RTSP streams video only
+                try {
+                    rtspServerCamera2?.disableAudio()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
 
                 // Ultra-small buffer: only ~166ms of frames at 30fps
                 // Drops old frames immediately to stay live
@@ -129,7 +153,7 @@ class StreamingService : Service(), ConnectChecker {
                 _connectionStatus.value = "Waiting for OBS to connect on port $port..."
                 startForeground(1, createNotification("Streaming Active", "Ready for OBS connection"))
             } else {
-                _connectionStatus.value = "Failed to prepare camera or audio"
+                _connectionStatus.value = "Failed to prepare camera"
             }
         }
     }
