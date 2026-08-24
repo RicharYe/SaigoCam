@@ -34,6 +34,9 @@ class StreamingService : Service(), ConnectChecker {
     private val _selectedResolution = MutableStateFlow<Size?>(null)
     val selectedResolution: StateFlow<Size?> = _selectedResolution
 
+    private val _currentBitrate = MutableStateFlow(0L)
+    val currentBitrate: StateFlow<Long> = _currentBitrate
+
     fun setResolution(size: Size) {
         if (_selectedResolution.value == size) return
         _selectedResolution.value = size
@@ -52,10 +55,9 @@ class StreamingService : Service(), ConnectChecker {
 
     private fun restartStream() {
         stopStreaming()
-        // Wait a tiny bit for the stop to process then start again
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
             startStreaming()
-        }, 500)
+        }, 200)  // 200ms is sufficient for encoder teardown
     }
 
     private val port = 1935
@@ -100,10 +102,28 @@ class StreamingService : Service(), ConnectChecker {
     fun startStreaming() {
         if (rtspServerCamera2?.isStreaming == false) {
             val res = _selectedResolution.value ?: Size(1280, 720)
-            val bitrate = if (res.width >= 1920) 4000 * 1024 else 2000 * 1024
-            
-            // Auto orientation handling by the library
-            if (rtspServerCamera2?.prepareAudio() == true && rtspServerCamera2?.prepareVideo(res.width, res.height, bitrate) == true) {
+            val fps = 30
+            // Higher bitrate needed for all-I-frame encoding (no inter-frame compression)
+            val bitrate = if (res.width >= 1920) 8_000_000 else 5_000_000
+            // iFrameInterval=0 → every frame is a keyframe (all-intra)
+            // OBS never waits for a keyframe → instant decode start
+            val iFrameInterval = 0
+            // Auto-detect camera sensor orientation for correct preview/stream rotation
+            val rotation = com.pedro.encoder.input.video.CameraHelper.getCameraOrientation(this)
+
+            if (rtspServerCamera2?.prepareAudio() == true &&
+                rtspServerCamera2?.prepareVideo(
+                    res.width, res.height, fps, bitrate, iFrameInterval, rotation
+                ) == true) {
+
+                // Ultra-small buffer: only ~166ms of frames at 30fps
+                // Drops old frames immediately to stay live
+                try {
+                    rtspServerCamera2?.getStreamClient()?.resizeCache(5)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+
                 rtspServerCamera2?.startStream()
                 _isStreaming.value = true
                 _connectionStatus.value = "Waiting for OBS to connect on port $port..."
@@ -134,6 +154,12 @@ class StreamingService : Service(), ConnectChecker {
 
     override fun onConnectionSuccess() {
         _connectionStatus.value = "Connected to OBS!"
+        // Clear any stale buffered frames so OBS starts from the latest frame
+        try {
+            rtspServerCamera2?.getStreamClient()?.clearCache()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(1, createNotification("Streaming to OBS", "Connected"))
     }
@@ -144,6 +170,16 @@ class StreamingService : Service(), ConnectChecker {
     }
 
     override fun onNewBitrate(bitrate: Long) {
+        _currentBitrate.value = bitrate
+        // If bitrate drops significantly, cache may be piling up — clear it
+        val targetBitrate = if ((_selectedResolution.value?.width ?: 0) >= 1920) 8_000_000L else 5_000_000L
+        if (bitrate > 0 && bitrate < targetBitrate / 4) {
+            try {
+                rtspServerCamera2?.getStreamClient()?.clearCache()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     override fun onDisconnect() {

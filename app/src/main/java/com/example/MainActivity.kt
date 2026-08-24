@@ -62,6 +62,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        // Keep the screen on while the app is running/visible
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        
         val requiredPermissions = mutableListOf(
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO
@@ -246,6 +249,16 @@ fun StreamContent(service: StreamingService) {
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(top = 4.dp)
                 )
+                if (isStreaming) {
+                    val bitrate by service.currentBitrate.collectAsState(initial = 0L)
+                    val bitrateText = if (bitrate > 0) "%.1f Mbps".format(bitrate / 1_000_000.0) else "—"
+                    Text(
+                        text = "Bitrate: $bitrateText",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
             }
         }
 
@@ -375,7 +388,34 @@ fun SetupGuideContent(service: StreamingService) {
                 Text("rtsp://127.0.0.1:1935", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
             }
         }
-        
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Google Meet Setup Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("4. Streaming to Google Meet", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    text = "Video: OBS Virtual Camera\n" +
+                           "• In OBS, with your SaigoCam feed already showing as a source:\n" +
+                           "• Click 'Start Virtual Camera' (bottom-right of OBS, or Tools → Start Virtual Camera).\n" +
+                           "• In Google Meet, click Settings (⚙️) → Video → select 'OBS Virtual Camera' as your camera.\n\n" +
+                           "Audio: Virtual Microphone (needs VB-Cable)\n" +
+                           "OBS Virtual Camera only sends video. To send phone microphone audio:\n" +
+                           "• Download & install VB-Cable (https://vb-audio.com/Cable/) on your PC.\n" +
+                           "• In OBS: Settings → Audio → Monitoring Device → set to 'CABLE Input (VB-Audio)'.\n" +
+                           "• In OBS Audio Mixer: Click the ⋮ (three dots) next to SaigoCam audio source → Advanced Audio Properties → set Monitor to 'Monitor and Output'.\n" +
+                           "• In Google Meet: Settings → Audio → Microphone → select 'CABLE Output (VB-Audio)'.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+
         Spacer(modifier = Modifier.height(24.dp))
     }
 }
