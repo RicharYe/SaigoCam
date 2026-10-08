@@ -1,240 +1,444 @@
 package com.example
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.Service
+import android.Manifest
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.os.Binder
+import android.content.ServiceConnection
+import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.Bundle
 import android.os.IBinder
-import androidx.core.app.NotificationCompat
-import com.pedro.rtspserver.RtspServerCamera2
-import com.pedro.common.ConnectChecker
+import android.view.SurfaceHolder
 import com.pedro.library.view.OpenGlView
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import com.example.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import android.util.Size
+import java.net.Inet4Address
+import java.net.NetworkInterface
 
-class StreamingService : Service(), ConnectChecker {
+class MainActivity : ComponentActivity() {
 
-    private val binder = LocalBinder()
-    var rtspServerCamera2: RtspServerCamera2? = null
-        private set
+    private var streamingService: StreamingService? = null
+    private var isBound = mutableStateOf(false)
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(className: ComponentName, service: IBinder) {
+            val binder = service as StreamingService.LocalBinder
+            streamingService = binder.getService()
+            isBound.value = true
+        }
+        override fun onServiceDisconnected(arg0: ComponentName) {
+            isBound.value = false
+            streamingService = null
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
         
-    private val _isStreaming = MutableStateFlow(false)
-    val isStreaming: StateFlow<Boolean> = _isStreaming
-    
-    private val _connectionStatus = MutableStateFlow("Disconnected")
-    val connectionStatus: StateFlow<String> = _connectionStatus
-
-    private val _resolutions = MutableStateFlow<List<Size>>(emptyList())
-    val resolutions: StateFlow<List<Size>> = _resolutions
-
-    private val _selectedResolution = MutableStateFlow<Size?>(null)
-    val selectedResolution: StateFlow<Size?> = _selectedResolution
-
-    private val _currentBitrate = MutableStateFlow(0L)
-    val currentBitrate: StateFlow<Long> = _currentBitrate
-
-    fun setResolution(size: Size) {
-        if (_selectedResolution.value == size) return
-        _selectedResolution.value = size
-        if (_isStreaming.value) {
-            restartStream()
+        // Keep the screen on while the app is running/visible
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        
+        val requiredPermissions = mutableListOf(
+            Manifest.permission.CAMERA
+        )
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            requiredPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
-    }
 
-    fun switchCamera() {
-        try {
-            rtspServerCamera2?.switchCamera()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
+        val intent = Intent(this, StreamingService::class.java)
+        startService(intent) // Start as sticky
+        bindService(intent, connection, Context.BIND_AUTO_CREATE)
 
-    private fun restartStream() {
-        stopStreaming()
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            startStreaming()
-        }, 200)  // 200ms is sufficient for encoder teardown
-    }
+        setContent {
+            MyApplicationTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize().safeDrawingPadding(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    var hasPermissions by remember {
+                        mutableStateOf(requiredPermissions.all {
+                            ContextCompat.checkSelfPermission(this@MainActivity, it) == PackageManager.PERMISSION_GRANTED
+                        })
+                    }
 
-    private val port = 1935
+                    val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
+                        ActivityResultContracts.RequestMultiplePermissions()
+                    ) { permissions ->
+                        hasPermissions = permissions.values.all { it }
+                    }
 
-    inner class LocalBinder : Binder() {
-        fun getService(): StreamingService = this@StreamingService
-    }
+                    LaunchedEffect(Unit) {
+                        if (!hasPermissions) {
+                            launcher.launch(requiredPermissions.toTypedArray())
+                        }
+                    }
 
-    override fun onBind(intent: Intent): IBinder {
-        return binder
-    }
-
-    override fun onCreate() {
-        super.onCreate()
-        createNotificationChannel()
-    }
-
-    fun initServer(context: Context) {
-        if (rtspServerCamera2 == null) {
-            rtspServerCamera2 = RtspServerCamera2(context, this, port)
-            try {
-                val backResolutions = rtspServerCamera2?.resolutionsBack ?: emptyList()
-                val standardResolutions = listOf(Size(1920, 1080), Size(1280, 720))
-                val availableStandard = standardResolutions.filter { std -> 
-                    backResolutions.any { it.width == std.width && it.height == std.height }
+                    val bound by isBound
+                    if (hasPermissions && bound && streamingService != null) {
+                        SaigoCamScreen(streamingService!!)
+                    } else {
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                if (!hasPermissions) {
+                                    Text("Camera permission is required to stream.", modifier = Modifier.padding(16.dp))
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Button(onClick = { launcher.launch(requiredPermissions.toTypedArray()) }) {
+                                        Text("Grant Permissions")
+                                    }
+                                } else {
+                                    CircularProgressIndicator()
+                                }
+                            }
+                        }
+                    }
                 }
-                
-                if (availableStandard.isNotEmpty()) {
-                    _resolutions.value = availableStandard
-                    _selectedResolution.value = availableStandard.last() // Default to 720p if available
-                } else {
-                    // Fallback just in case
-                    _resolutions.value = listOf(Size(1280, 720))
-                    _selectedResolution.value = _resolutions.value.first()
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
             }
         }
-    }
-
-    fun startStreaming() {
-        if (rtspServerCamera2?.isStreaming == false) {
-            val res = _selectedResolution.value ?: Size(1280, 720)
-            val fps = 30
-            // Higher bitrate needed for all-I-frame encoding (no inter-frame compression)
-            val bitrate = if (res.width >= 1920) 8_000_000 else 5_000_000
-            // iFrameInterval=0 → every frame is a keyframe (all-intra)
-            // OBS never waits for a keyframe → instant decode start
-            val iFrameInterval = 0
-            // Auto-detect camera sensor orientation for correct preview/stream rotation
-            val rotation = com.pedro.encoder.input.video.CameraHelper.getCameraOrientation(this)
-
-            // Set AVC/H.264 profile to Constrained Baseline (no B-frames) for zero-latency decoding
-            val profile = android.media.MediaCodecInfo.CodecProfileLevel.AVCProfileConstrainedBaseline
-            val level = -1 // Let the encoder choose the appropriate level
-
-            var prepared = false
-            try {
-                prepared = rtspServerCamera2?.prepareVideo(
-                    res.width, res.height, fps, bitrate, iFrameInterval, rotation, profile, level
-                ) == true
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-
-            // Fallback to default profile if constrained baseline is not supported by the hardware encoder
-            if (!prepared) {
-                prepared = rtspServerCamera2?.prepareVideo(
-                    res.width, res.height, fps, bitrate, iFrameInterval, rotation
-                ) == true
-            }
-
-            if (prepared) {
-
-                // Disable audio track completely so RTSP streams video only
-                try {
-                    rtspServerCamera2?.disableAudio()
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-
-                // Ultra-small buffer: only ~166ms of frames at 30fps
-                // Drops old frames immediately to stay live
-                try {
-                    rtspServerCamera2?.getStreamClient()?.resizeCache(5)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-
-                rtspServerCamera2?.startStream()
-                _isStreaming.value = true
-                _connectionStatus.value = "Waiting for OBS to connect on port $port..."
-                startForeground(1, createNotification("Streaming Active", "Ready for OBS connection"))
-            } else {
-                _connectionStatus.value = "Failed to prepare camera"
-            }
-        }
-    }
-
-    fun stopStreaming() {
-        if (rtspServerCamera2?.isStreaming == true) {
-            rtspServerCamera2?.stopStream()
-        }
-        _isStreaming.value = false
-        _connectionStatus.value = "Disconnected"
-        stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        stopStreaming()
-    }
-
-    override fun onConnectionStarted(rtspUrl: String) {
-        _connectionStatus.value = "Connecting..."
-    }
-
-    override fun onConnectionSuccess() {
-        _connectionStatus.value = "Connected to OBS!"
-        // Clear any stale buffered frames so OBS starts from the latest frame
-        try {
-            rtspServerCamera2?.getStreamClient()?.clearCache()
-        } catch (e: Exception) {
-            e.printStackTrace()
+        if (isBound.value) {
+            unbindService(connection)
+            isBound.value = false
         }
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(1, createNotification("Streaming to OBS", "Connected"))
     }
+}
 
-    override fun onConnectionFailed(reason: String) {
-        _connectionStatus.value = "Connection Failed: $reason"
-        stopStreaming()
-    }
+@Composable
+fun SaigoCamScreen(service: StreamingService) {
+    var selectedTab by remember { mutableIntStateOf(0) }
+    val tabs = listOf("串流", "使用说明")
 
-    override fun onNewBitrate(bitrate: Long) {
-        _currentBitrate.value = bitrate
-        // If bitrate drops significantly, cache may be piling up — clear it
-        val targetBitrate = if ((_selectedResolution.value?.width ?: 0) >= 1920) 8_000_000L else 5_000_000L
-        if (bitrate > 0 && bitrate < targetBitrate / 4) {
-            try {
-                rtspServerCamera2?.getStreamClient()?.clearCache()
-            } catch (e: Exception) {
-                e.printStackTrace()
+    Column(modifier = Modifier.fillMaxSize()) {
+        TabRow(selectedTabIndex = selectedTab) {
+            tabs.forEachIndexed { index, title ->
+                Tab(
+                    selected = selectedTab == index,
+                    onClick = { selectedTab = index },
+                    text = { Text(title, fontWeight = FontWeight.SemiBold) }
+                )
+            }
+        }
+
+        Box(modifier = Modifier.weight(1f)) {
+            if (selectedTab == 0) {
+                StreamContent(service)
+            } else {
+                SetupGuideContent(service)
             }
         }
     }
+}
 
-    override fun onDisconnect() {
-        _connectionStatus.value = "Disconnected from OBS"
-        stopStreaming()
-    }
+@Composable
+fun StreamContent(service: StreamingService) {
+    val isStreaming by service.isStreaming.collectAsState(initial = false)
+    val connectionStatus by service.connectionStatus.collectAsState(initial = "未连接")
+    var surfaceView by remember { mutableStateOf<OpenGlView?>(null) }
 
-    override fun onAuthError() {
-        _connectionStatus.value = "Auth Error"
-        stopStreaming()
-    }
-    
-    override fun onAuthSuccess() {
-    }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Camera Preview with Switch Overlay
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .background(Color.Black, RoundedCornerShape(12.dp))
+                .padding(4.dp)
+        ) {
+            AndroidView(
+                factory = { ctx ->
+                    OpenGlView(ctx).apply {
+                        holder.addCallback(object : SurfaceHolder.Callback {
+                            override fun surfaceCreated(holder: SurfaceHolder) {
+                                service.initServer(ctx)
+                                try {
+                                    service.rtspServerCamera2?.replaceView(this@apply)
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
+                                if (service.rtspServerCamera2?.isOnPreview == false) {
+                                    service.rtspServerCamera2?.startPreview()
+                                }
+                            }
+                            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
+                            override fun surfaceDestroyed(holder: SurfaceHolder) {
+                                try {
+                                    service.rtspServerCamera2?.replaceView(ctx)
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
+                                if (!isStreaming) {
+                                    service.rtspServerCamera2?.stopPreview()
+                                }
+                            }
+                        })
+                        surfaceView = this
+                    }
+                },
+                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp))
+            )
 
-    private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            "streaming_channel",
-            "Streaming Service",
-            NotificationManager.IMPORTANCE_LOW
-        )
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(channel)
-    }
+            // Switch Camera Overlay Button
+            IconButton(
+                onClick = { 
+                    try {
+                        service.rtspServerCamera2?.switchCamera()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .background(Color.Black.copy(alpha = 0.5f), shape = RoundedCornerShape(50))
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "切换摄像头",
+                    tint = Color.White
+                )
+            }
+        }
 
-    private fun createNotification(title: String, content: String): Notification {
-        return NotificationCompat.Builder(this, "streaming_channel")
-            .setContentTitle(title)
-            .setContentText(content)
-            .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setOngoing(true)
-            .build()
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Status
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("连接状态", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text(
+                    text = if (isStreaming) "● $connectionStatus" else "● Disconnected",
+                    color = if (isStreaming) Color(0xFF4CAF50) else Color.Gray,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                if (isStreaming) {
+                    val bitrate by service.currentBitrate.collectAsState(initial = 0L)
+                    val bitrateText = if (bitrate > 0) "%.1f Mbps".format(bitrate / 1_000_000.0) else "—"
+                    Text(
+                        text = "Bitrate: $bitrateText",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Settings
+        val resolutions by service.resolutions.collectAsState(initial = emptyList())
+        val selectedResolution by service.selectedResolution.collectAsState(initial = null)
+        var expanded by remember { mutableStateOf(false) }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("分辨率选择", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = { expanded = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(selectedResolution?.let { "${it.width}x${it.height}" } ?: "选择分辨率")
+                    }
+                    DropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false },
+                        modifier = Modifier.fillMaxWidth(0.9f)
+                    ) {
+                        resolutions.forEach { res ->
+                            DropdownMenuItem(
+                                text = { Text("${res.width}x${res.height}") },
+                                onClick = {
+                                    service.setResolution(res)
+                                    expanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Start/Stop Button
+        Button(
+            onClick = {
+                if (isStreaming) {
+                    service.stopStreaming()
+                } else {
+                    service.startStreaming()
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (isStreaming) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+            )
+        ) {
+            Text(
+                text = if (isStreaming) "停止串流" else "开始串流",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
+}
+
+@Composable
+fun SetupGuideContent(service: StreamingService) {
+    val context = LocalContext.current
+    val ipAddress = getLocalIpAddress(context)
+    val scrollState = androidx.compose.foundation.rememberScrollState()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(scrollState)
+    ) {
+        Text("OBS 使用说明", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Wi-Fi Setup (VLC Video Source)
+        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("1. Wi-Fi Setup (VLC Video Source)", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("VLC is recommended for instant auto-connecting.\n\n• Install VLC on your PC and restart OBS.\n• Open OBS Studio -> Sources -> '+' -> 'VLC Video Source'.\n• CHECK 'Loop Playlist' (Required for auto-connect).\n• Set 'Network Caching' to 100ms (lowest possible).\n• In the Playlist box, click '+' -> 'Add Path/URL'.\n• Enter the exact URL below.\n\n*Note: If the app was recently closed or OBS was just opened, double-click the VLC source and click 'OK' to wake it up.*\n\n*Pro-Tip: Sometimes just clicking the \"Eye\" icon (hide/unhide) next to the source in OBS is enough to wake it up, which is much faster than opening properties.*")
+                Spacer(modifier = Modifier.height(12.dp))
+                Text("VLC Source URL:", fontWeight = FontWeight.SemiBold)
+                Text("rtsp://$ipAddress:1935", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Wi-Fi Setup (Media Source)
+        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("2. Wi-Fi Setup (Media Source)", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("• Ensure PC and Phone are on the same Wi-Fi.\n• In the Stream tab, tap 'START STREAMING'.\n• Open OBS Studio -> Sources -> '+' -> 'Media Source'.\n• Uncheck 'Local File'.\n• Uncheck 'Use hardware decoding when available'.\n• Set 'Network Buffering' to 0 MB.\n• Set Input to the URL below.\n\n*Note: If the feed doesn't show up immediately, double-click the Media Source in OBS to open Properties and click 'OK' to force it to connect.*\n\n*Pro-Tip: Sometimes just clicking the \"Eye\" icon (hide/unhide) next to the source in OBS is enough to wake it up, which is much faster than opening properties.*")
+                Spacer(modifier = Modifier.height(12.dp))
+                Text("Media Source URL:", fontWeight = FontWeight.SemiBold)
+                Text("rtsp://$ipAddress:1935", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // USB Setup
+        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("3. USB Setup (Lowest Latency)", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("• Enable USB Debugging on your phone.\n• Connect via USB to your PC.\n• Open terminal/cmd on your PC and run:")
+                Card(modifier = Modifier.padding(vertical = 8.dp).fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.Black)) {
+                    Text("adb forward tcp:1935 tcp:1935", color = Color.Green, modifier = Modifier.padding(8.dp), fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                }
+                Text("• Start streaming in this app.\n• Use the USB URL below in OBS with either the Media Source or VLC Source method.")
+                Spacer(modifier = Modifier.height(12.dp))
+                Text("USB URL:", fontWeight = FontWeight.SemiBold)
+                Text("rtsp://127.0.0.1:1935", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Google Meet Setup Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("4. Streaming to Google Meet", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    text = "Video: OBS Virtual Camera\n" +
+                           "• In OBS, with your SaigoCam video feed already showing as a source:\n" +
+                           "• Click 'Start Virtual Camera' (bottom-right of OBS, or Tools → Start Virtual Camera).\n" +
+                           "• In Google Meet, click Settings (⚙️) → Video → select 'OBS Virtual Camera' as your camera.\n\n" +
+                           "Audio Setup\n" +
+                           "• This app streams video only for absolute minimum latency.\n" +
+                           "• You can add and use any audio source (such as your PC microphone, USB headset, or external microphone) directly in OBS or Google Meet.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+    }
+}
+
+fun getLocalIpAddress(context: Context): String {
+    try {
+        val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
+        var fallbackIp = "Unknown"
+        while (interfaces.hasMoreElements()) {
+            val networkInterface = interfaces.nextElement()
+            val addresses = networkInterface.inetAddresses
+            while (addresses.hasMoreElements()) {
+                val address = addresses.nextElement()
+                if (!address.isLoopbackAddress && address is java.net.Inet4Address) {
+                    val ip = address.hostAddress ?: continue
+                    if (networkInterface.name.contains("wlan")) {
+                        return ip // Prefer Wi-Fi
+                    } else if (networkInterface.name.contains("eth")) {
+                        return ip // Prefer Ethernet
+                    }
+                    fallbackIp = ip
+                }
+            }
+        }
+        return fallbackIp
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+    return "Unknown"
 }
