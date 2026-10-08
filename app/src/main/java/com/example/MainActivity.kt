@@ -135,7 +135,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun SaigoCamScreen(service: StreamingService) {
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Stream", "Setup Guide")
+    val tabs = listOf("串流", "使用说明")
 
     Column(modifier = Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = selectedTab) {
@@ -161,7 +161,7 @@ fun SaigoCamScreen(service: StreamingService) {
 @Composable
 fun StreamContent(service: StreamingService) {
     val isStreaming by service.isStreaming.collectAsState(initial = false)
-    val connectionStatus by service.connectionStatus.collectAsState(initial = "Disconnected")
+    val connectionStatus by service.connectionStatus.collectAsState(initial = "未连接")
     var surfaceView by remember { mutableStateOf<OpenGlView?>(null) }
 
     Column(
@@ -227,7 +227,7 @@ fun StreamContent(service: StreamingService) {
             ) {
                 Icon(
                     imageVector = Icons.Default.Refresh,
-                    contentDescription = "Switch Camera",
+                    contentDescription = "切换摄像头",
                     tint = Color.White
                 )
             }
@@ -241,7 +241,7 @@ fun StreamContent(service: StreamingService) {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("Connection", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text("连接状态", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                 Text(
                     text = if (isStreaming) "● $connectionStatus" else "● Disconnected",
                     color = if (isStreaming) Color(0xFF4CAF50) else Color.Gray,
@@ -273,7 +273,7 @@ fun StreamContent(service: StreamingService) {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("Resolution Selection", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text("分辨率选择", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                 Spacer(modifier = Modifier.height(16.dp))
                 
                 Box(modifier = Modifier.fillMaxWidth()) {
@@ -281,7 +281,7 @@ fun StreamContent(service: StreamingService) {
                         onClick = { expanded = true },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(selectedResolution?.let { "${it.width}x${it.height}" } ?: "Select Resolution")
+                        Text(selectedResolution?.let { "${it.width}x${it.height}" } ?: "选择分辨率")
                     }
                     DropdownMenu(
                         expanded = expanded,
@@ -321,7 +321,7 @@ fun StreamContent(service: StreamingService) {
             )
         ) {
             Text(
-                text = if (isStreaming) "STOP STREAMING" else "START STREAMING",
+                text = if (isStreaming) "停止串流" else "开始串流",
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold
             )
@@ -341,7 +341,7 @@ fun SetupGuideContent(service: StreamingService) {
             .padding(16.dp)
             .verticalScroll(scrollState)
     ) {
-        Text("OBS Setup Guide", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        Text("OBS 使用说明", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
         Spacer(modifier = Modifier.height(16.dp))
 
         // Wi-Fi Setup (VLC Video Source)
